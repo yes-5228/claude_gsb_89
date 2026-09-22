@@ -9,11 +9,12 @@
 
 | 模块 | 页面 | 说明 |
 | --- | --- | --- |
-| 运行看板 | `/` | 跨模块汇总管段、任务、清淤量、验收合格率，含待验收任务与分片区统计 |
+| 运行看板 | `/` | 跨模块汇总管段、任务、清淤量、验收合格率与平均总分，含评分项逐项统计、待验收任务与分片区统计 |
 | 管段台账 | `/segments`、`/segments/new`、`/segments/:id`、`/segments/:id/edit` | 管段档案维护、任务概况、清淤履历（计划 → 记录 → 验收） |
 | 清淤任务 | `/tasks`、`/tasks/new`、`/tasks/:id`、`/tasks/:id/edit` | 任务登记、开工 / 完工报验 / 取消、任务下清淤记录与验收结论 |
 | 清淤记录 | `/records`、`/records/new`、`/records/:id`、`/records/:id/edit` | 按次录入现场数据（长度、清淤量、用水量、人数、设备、安全措施等） |
-| 验收记录 | `/acceptances`、`/acceptances/new`、`/acceptances/:id` | 登记验收结论、整改跟踪、复验 |
+| 验收记录 | `/acceptances`、`/acceptances/new`、`/acceptances/:id` | 评分项逐项打分登记验收、整改跟踪、复验 |
+| 评分项设置 | `/settings/score-templates` | 评分模板版本管理（调整评分项 = 发布带生效日期的新版本，历史版本不可改） |
 | 枚举字典 | `/api/v1/meta/enums` | 后端统一下发全部枚举中文标签，前端不硬编码文案 |
 
 ## 技术栈
@@ -150,11 +151,15 @@ npm run dev            # http://localhost:5173
 | GET | `/api/v1/cleaning-records` | 记录列表（`keyword` `taskId` `segmentId` `method` `weather` `dateFrom` `dateTo`） |
 | GET | `/api/v1/cleaning-records/:id` | 记录详情（含所属任务与管段） |
 | POST/PUT/DELETE | `/api/v1/cleaning-records[/:id]` | 录入 / 修改 / 删除清淤记录 |
-| GET | `/api/v1/acceptances` | 验收列表（`keyword` `taskId` `segmentId` `result` `inspectorName` `dateFrom` `dateTo` `pendingRectify`） |
-| GET | `/api/v1/acceptances/:id` | 验收详情（含任务与清淤汇总） |
-| POST | `/api/v1/acceptances` | 登记验收结论 |
+| GET | `/api/v1/acceptances` | 验收列表（`keyword` `taskId` `segmentId` `result` `inspectorName` `dateFrom` `dateTo` `pendingRectify`），含评分项明细 |
+| GET | `/api/v1/acceptances/:id` | 验收详情（含评分项明细、模板版本、任务与清淤汇总） |
+| POST | `/api/v1/acceptances` | 登记验收结论（按评分项逐项打分，总分自动汇总） |
 | POST | `/api/v1/acceptances/:id/rectify` | 登记整改完成 |
 | DELETE | `/api/v1/acceptances/:id` | 删除验收记录（合格结论不允许删除） |
+| GET | `/api/v1/acceptances/score-templates` | 全部评分模板版本（按生效日期倒序，标注当前版本） |
+| GET | `/api/v1/acceptances/score-templates/effective?date=` | 指定日期（默认今天）适用的评分模板 |
+| POST | `/api/v1/acceptances/score-templates` | 发布新评分模板版本（生效日期不可重复，各项上限合计 100） |
+| GET | `/api/v1/dashboard/acceptance-score-stats` | 验收平均总分与各评分项得分 / 扣分统计 |
 
 ## 数据模型与状态流转
 
@@ -175,6 +180,13 @@ pending ──开工──▶ in_progress ──完工报验──▶ completed 
 - 完工报验要求任务下至少有 1 条清淤记录。
 - 验收登记要求任务处于「待验收」，且该任务没有已判定合格的验收记录；
   若上一次结论为「需整改」，必须先登记整改完成才能复验。
+- 验收评分拆为若干评分项，每项有分值上限与扣分说明；总分由各评分项实际得分自动汇总（满分 100），
+  不再手工填写。总分低于合格线 60 分时结论只能选择「需整改」，并强制填写存在问题与整改期限；
+  扣分必须填写扣分说明，满分项不允许填写扣分说明。
+- 评分项调整以「模板版本 + 生效日期」管理：发布新版本不修改旧版本，验收登记按验收日期锁定当时版本，
+  并把逐项打分固化为快照。详情、列表与统计都只读快照 / 主表总分，不按当前模板实时回算，
+  因此同一份验收记录在任何页面看到的总分始终一致；升级前已登记的历史验收记录没有评分项明细，
+  总分保持登记时的原值不变。
 - 验收合格会在**同一个事务**内把任务置为「已验收」、写入验收时间，并把管段清淤次数 +1、
   回写最近清淤日期与运行状态。
 - 删除保护：被任务引用的管段、已产生清淤记录或验收记录的任务、被验收记录引用的清淤记录、
@@ -182,7 +194,7 @@ pending ──开工──▶ in_progress ──完工报验──▶ completed 
 
 ## 校验与错误码
 
-字段校验基于 `validator`，错误文案通过结构体 `label` 标签直接输出中文，例如「验证评分不能大于 100」。
+字段校验基于 `validator`，错误文案通过结构体 `label` 标签直接输出中文，例如「评分项分值上限不能大于 100」。
 分页参数自动规整：`page` 最小 1，`pageSize` 默认 10、最大 100。
 
 | 业务码 | HTTP | 含义 |
@@ -234,7 +246,13 @@ nginx 在后端不可达时会返回 JSON 形式的 502（`code: 50000`），先
 只有「待开工」「清淤中」的任务可以录入或修改记录；已完工报验、已验收、已取消的任务都会被拒绝。
 
 **验收时提示评分过低？**
-判定合格要求评分不低于 60 分，低于该阈值请改判为「需整改」或修正评分。
+判定合格要求评分项自动汇总总分不低于 60 分。总分低于 60 分时结论只能选择「需整改」，
+并须填写存在问题与整改期限；请核对各评分项扣分或选择需整改。
+
+**调整评分项后，历史验收的总分会变吗？**
+不会。调整评分项是在「评分项设置」里发布带生效日期的新版本，旧版本保持不变；
+每份验收记录都固化了登记时适用版本的逐项打分快照，详情、列表与统计读取同一份数据，
+升级前登记的历史记录则继续沿用原总分。
 
 **如何重置演示数据？**
 `docker compose down -v` 删除数据卷后重新 `up`，即会重新建表并写入演示数据。

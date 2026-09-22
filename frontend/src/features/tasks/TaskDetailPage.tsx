@@ -247,7 +247,7 @@ export function TaskDetailPage() {
                     { label: '验收编号', value: acceptance.code },
                     { label: '验收结论', value: <StatusTag list="acceptanceResults" value={acceptance.result} /> },
                     { label: '验收日期', value: formatDate(acceptance.acceptedAt) },
-                    { label: '验收评分', value: `${acceptance.score} 分` },
+                    { label: '验收总分', value: `${acceptance.score} 分（评分项明细见验收详情）` },
                     { label: '验收人', value: acceptance.inspectorName },
                     { label: '验收单位', value: acceptance.inspectorOrg || '—' },
                     { label: '整改期限', value: formatDate(acceptance.rectifyDeadline) },

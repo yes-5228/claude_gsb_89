@@ -8,7 +8,12 @@ import { StatCard } from '../../components/StatCard';
 import { StateBlock } from '../../components/StateBlock';
 import { useAsync } from '../../hooks/useAsync';
 import { useMeta } from '../../providers/MetaProvider';
-import type { DistrictStat, PendingAcceptanceItem, RecentRecordItem } from '../../types/domain';
+import type {
+  AcceptanceScoreStats,
+  DistrictStat,
+  PendingAcceptanceItem,
+  RecentRecordItem
+} from '../../types/domain';
 import { formatDate, formatLength, formatNumber, formatPercent, formatVolume } from '../../utils/format';
 import { optionLabel } from '../../utils/options';
 
@@ -74,6 +79,93 @@ const pendingColumns: Column<PendingAcceptanceItem>[] = [
   }
 ];
 
+/** 验收评分项统计区块：平均分 / 扣分率逐项展示，并按模板版本分组。 */
+function ScoreStatsBlock({
+  stats,
+  loading,
+  error,
+  onRetry
+}: {
+  stats: AcceptanceScoreStats | null;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+}) {
+  if (loading) {
+    return <div className="table-state">数据加载中…</div>;
+  }
+  if (error) {
+    return (
+      <div className="table-state table-state-error">
+        <p>{error}</p>
+        <button type="button" className="btn btn-ghost" onClick={onRetry}>
+          重新加载
+        </button>
+      </div>
+    );
+  }
+  if (!stats || stats.total === 0) {
+    return <p className="form-note">暂无验收评分数据。</p>;
+  }
+
+  return (
+    <div className="card-body-flush">
+      <div className="score-summary-bar">
+        <span className="score-total-text">
+          验收 <strong>{stats.total}</strong> 次 · 平均总分 <strong>{formatNumber(stats.average, 1)}</strong> 分
+        </span>
+        <span className="cell-sub">逐项统计仅覆盖有评分项明细的记录，历史无明细记录不计入下表</span>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th style={{ width: 60 }}>序号</th>
+              <th>评分项</th>
+              <th style={{ width: 110, textAlign: 'right' }}>分值上限</th>
+              <th style={{ width: 110, textAlign: 'right' }}>平均得分</th>
+              <th style={{ width: 100, textAlign: 'right' }}>样本数</th>
+              <th style={{ width: 150 }}>扣分比例</th>
+              <th style={{ width: 140 }}>模板版本</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.itemStats.map((item) => (
+              <tr key={`${item.templateId}-${item.sortOrder}`}>
+                <td>{item.sortOrder}</td>
+                <td>
+                  <span className="cell-main">{item.name}</span>
+                </td>
+                <td style={{ textAlign: 'right' }} className="cell-num">
+                  {item.maxScore}
+                </td>
+                <td style={{ textAlign: 'right' }} className="cell-num">
+                  {formatNumber(item.averageScore, 1)}
+                </td>
+                <td style={{ textAlign: 'right' }} className="cell-num">
+                  {item.sampleCount}
+                </td>
+                <td>
+                  <div className="bar-track">
+                    <div
+                      className={`bar-fill ${item.deductedRate >= 50 ? 'bar-fill-danger' : ''}`}
+                      style={{ width: `${Math.min(100, item.deductedRate)}%` }}
+                    />
+                  </div>
+                  <span className="cell-sub">{formatPercent(item.deductedRate)}（{item.deductedCount} 次扣分）</span>
+                </td>
+                <td>
+                  <span className="tag tag-muted">版本 #{item.templateId}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 const recentColumns: Column<RecentRecordItem>[] = [
   { key: 'code', title: '记录编号', width: '140px', render: (row) => <span className="cell-main">{row.code}</span> },
   { key: 'cleanedAt', title: '清淤日期', width: '110px', render: (row) => formatDate(row.cleanedAt) },
@@ -100,6 +192,7 @@ export function DashboardPage() {
   const districts = useAsync(() => dashboardApi.districtStats(), []);
   const pending = useAsync(() => dashboardApi.pendingAcceptance(6), []);
   const recent = useAsync(() => dashboardApi.recentRecords(6), []);
+  const scoreStats = useAsync(() => dashboardApi.acceptanceScoreStats(), []);
 
   const data = overview.data;
   const taskStatusBars: BarItem[] = enums
@@ -184,8 +277,23 @@ export function DashboardPage() {
             tone="success"
             onClick={() => navigate('/acceptances')}
           />
+          <StatCard
+            label="验收平均总分"
+            value={formatNumber(data?.averageAcceptanceScore ?? 0, 1)}
+            hint="取验收登记时固化的总分"
+            tone="primary"
+            onClick={() => navigate('/acceptances')}
+          />
         </div>
       </StateBlock>
+
+      <SectionCard
+        title="验收评分项统计"
+        subtitle="按评分项快照统计实际得分与扣分比例；模板版本调整只影响之后的验收记录，历史总分保持不变"
+        extra={<Link className="link" to="/settings/score-templates">评分项设置</Link>}
+      >
+        <ScoreStatsBlock stats={scoreStats.data} loading={scoreStats.loading} error={scoreStats.error} onRetry={scoreStats.reload} />
+      </SectionCard>
 
       <div className="panel-grid panel-grid-wide">
         <SectionCard

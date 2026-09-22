@@ -8,6 +8,12 @@ import (
 // Register 注册清淤任务路由，并返回 service 供其他模块装配依赖。
 func Register(router fiber.Router, db *gorm.DB, segments SegmentGateway) *Service {
 	svc := NewService(NewRepository(db), segments)
+	RegisterWith(router, svc)
+	return svc
+}
+
+// RegisterWith 用已装配好的 service 注册清淤任务路由。
+func RegisterWith(router fiber.Router, svc *Service) {
 	handler := NewHandler(svc)
 
 	group := router.Group("/cleaning-tasks")
@@ -19,6 +25,4 @@ func Register(router fiber.Router, db *gorm.DB, segments SegmentGateway) *Servic
 	group.Post("/:id/start", handler.Start)
 	group.Post("/:id/complete", handler.Complete)
 	group.Post("/:id/cancel", handler.Cancel)
-
-	return svc
 }

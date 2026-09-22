@@ -23,7 +23,13 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/records', label: '清淤记录' }
     ]
   },
-  { title: '质量管理', items: [{ to: '/acceptances', label: '验收记录' }] }
+  {
+    title: '质量管理',
+    items: [
+      { to: '/acceptances', label: '验收记录' },
+      { to: '/settings/score-templates', label: '评分项设置' }
+    ]
+  }
 ];
 
 /** 根据当前路径推断所属模块，显示在顶部状态条上。 */

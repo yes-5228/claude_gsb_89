@@ -8,6 +8,12 @@ import (
 // Register 注册管段台账路由，并返回 service 供其他模块装配依赖。
 func Register(router fiber.Router, db *gorm.DB) *Service {
 	svc := NewService(NewRepository(db))
+	RegisterWith(router, svc)
+	return svc
+}
+
+// RegisterWith 用已装配好的 service 注册管段台账路由。
+func RegisterWith(router fiber.Router, svc *Service) {
 	handler := NewHandler(svc)
 
 	group := router.Group("/pipe-segments")
@@ -19,6 +25,4 @@ func Register(router fiber.Router, db *gorm.DB) *Service {
 	group.Put("/:id", handler.Update)
 	group.Delete("/:id", handler.Delete)
 	group.Get("/:id/cleaning-history", handler.History)
-
-	return svc
 }

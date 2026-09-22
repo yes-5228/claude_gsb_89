@@ -68,6 +68,10 @@ func NewServices(db *gorm.DB) *Services {
 	tasks := cleaningtask.NewService(cleaningtask.NewRepository(db), segments)
 	records := cleaningrecord.NewService(cleaningrecord.NewRepository(db), tasks)
 	acceptances := acceptance.NewService(acceptance.NewRepository(db), tasks, segments, records)
+	// 与生产启动流程保持一致：登记验收前必须有生效的评分模板。
+	if err := acceptances.EnsureDefaultTemplate(context.Background()); err != nil {
+		panic(fmt.Sprintf("初始化默认评分模板失败: %v", err))
+	}
 	return &Services{Segments: segments, Tasks: tasks, Records: records, Acceptances: acceptances}
 }
 
@@ -174,29 +178,57 @@ func (s *Services) Reload(t *testing.T, taskID uint) *cleaningtask.CleaningTask 
 
 // PassRequest 构造一份验收合格的请求。
 func PassRequest(taskID uint, score int) acceptance.SaveRequest {
-	return acceptance.SaveRequest{
+	req := acceptance.SaveRequest{
 		TaskID:           taskID,
 		AcceptedAt:       date.Today(),
 		InspectorName:    "测试验收人",
 		InspectorOrg:     "测试验收单位",
 		Result:           acceptance.ResultPass,
-		Score:            score,
 		ResidualSludgeMm: 10,
 	}
+	req.ScoreItems = fillScoreItems(score)
+	return req
 }
 
 // ReworkRequest 构造一份验收需整改的请求。
 func ReworkRequest(taskID uint) acceptance.SaveRequest {
 	deadline := date.Today().AddDays(3)
-	return acceptance.SaveRequest{
+	req := acceptance.SaveRequest{
 		TaskID:           taskID,
 		AcceptedAt:       date.Today(),
 		InspectorName:    "测试验收人",
 		InspectorOrg:     "测试验收单位",
 		Result:           acceptance.ResultRework,
-		Score:            50,
 		ResidualSludgeMm: 40,
 		Issues:           "残留淤积厚度超出验收标准",
 		RectifyDeadline:  &deadline,
 	}
+	req.ScoreItems = fillScoreItems(50)
+	return req
+}
+
+// fillScoreItems 按默认评分模板构造逐项打分，使实际得分之和等于 total。
+// 扣分按模板顺序贪心摊到各评分项，被扣分的项给出扣分说明。
+func fillScoreItems(total int) []acceptance.ScoreItemInput {
+	defs := acceptance.DefaultTemplateItems()
+	remaining := 100 - total
+	actual := make([]int, len(defs))
+	for i, def := range defs {
+		deducted := remaining
+		if deducted > def.MaxScore {
+			deducted = def.MaxScore
+		}
+		actual[i] = def.MaxScore - deducted
+		remaining -= deducted
+	}
+	items := make([]acceptance.ScoreItemInput, 0, len(defs))
+	for i, def := range defs {
+		input := acceptance.ScoreItemInput{ActualScore: &actual[i]}
+		input.Name = def.Name
+		if def.MaxScore > actual[i] {
+			input.DeductionReason = "测试扣分说明"
+		}
+		items = append(items, input)
+	}
+	return items
 }

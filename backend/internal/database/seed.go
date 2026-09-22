@@ -279,6 +279,69 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 			return err
 		}
 
+		// 默认评分模板在启动时已由 EnsureDefaultTemplate 写入，这里为演示验收记录补齐逐项打分快照，
+		// 使总分 92 / 88 / 55 与评分项明细一致。
+		var template acceptance.ScoreTemplateVersion
+		if err := tx.Where("effective_from = ?", date.MustParse(acceptance.DefaultTemplateEffectiveFrom).Time).
+			First(&template).Error; err != nil {
+			return err
+		}
+		var templateItems []acceptance.ScoreTemplateItem
+		if err := tx.Where("template_id = ?", template.ID).Order("sort_order ASC").Find(&templateItems).Error; err != nil {
+			return err
+		}
+		deductions := [][]struct {
+			deduction int
+			reason    string
+		}{
+			{
+				{2, "Y1-10 井段局部残留少量淤泥"},
+				{2, "抽检一处残留厚度 8mm，接近限值"},
+				{1, "一处接口位置轻微挂淤"},
+				{1, "井壁冲洗不够彻底"},
+				{2, "部分影像资料未按井段归档"},
+			},
+			{
+				{2, "W2-09 井段底部有少量砂石残留"},
+				{3, "干管远端抽检残留厚度 12mm"},
+				{2, "支管接口处有轻微壅水痕迹"},
+				{2, "W2-11 井室有零星浮渣"},
+				{3, "绞车作业记录缺少班次签字"},
+			},
+			{
+				{15, "错口段前后 5m 淤积未清理到位"},
+				{12, "残留淤积厚度 45mm，超出 20mm 验收标准"},
+				{8, "错口处过水断面缩窄，排水不畅"},
+				{5, "井室底部余泥未清运干净"},
+				{5, "复检影像与测量记录不完整"},
+			},
+		}
+		scoreItems := make([]acceptance.AcceptanceScoreItem, 0, len(acceptances)*len(templateItems))
+		for i := range acceptances {
+			acceptances[i].ScoreTemplateID = &template.ID
+			if err := tx.Model(&acceptance.AcceptanceRecord{}).
+				Where("id = ?", acceptances[i].ID).
+				Update("score_template_id", template.ID).Error; err != nil {
+				return err
+			}
+			for j, def := range templateItems {
+				deduction := deductions[i][j].deduction
+				scoreItems = append(scoreItems, acceptance.AcceptanceScoreItem{
+					AcceptanceID:    acceptances[i].ID,
+					TemplateID:      template.ID,
+					Name:            def.Name,
+					MaxScore:        def.MaxScore,
+					ActualScore:     def.MaxScore - deduction,
+					Deduction:       deduction,
+					DeductionReason: deductions[i][j].reason,
+					SortOrder:       def.SortOrder,
+				})
+			}
+		}
+		if err := tx.Create(&scoreItems).Error; err != nil {
+			return err
+		}
+
 		logger.Info("演示数据初始化完成",
 			"segments", len(segments),
 			"tasks", len(tasks),

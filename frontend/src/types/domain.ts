@@ -260,6 +260,49 @@ export interface RecordPayload {
 
 // ---------- 验收记录 ----------
 
+/** 评分模板版本下的单个评分项定义。 */
+export interface ScoreTemplateItem {
+  id?: number;
+  templateId?: number;
+  name: string;
+  /** 分值上限，同一版本各评分项上限合计 100。 */
+  maxScore: number;
+  sortOrder: number;
+  criteria: string;
+}
+
+/** 评分模板版本（调整评分项 = 发布带生效日期的新版本，旧版本不可变）。 */
+export interface ScoreTemplate {
+  id: number;
+  effectiveFrom: string;
+  remark: string;
+  items: ScoreTemplateItem[];
+  /** 是否为当前日期生效的版本（列表接口附带）。 */
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** 登记验收时提交的单个评分项打分结果。 */
+export interface ScoreItemInput {
+  name: string;
+  actualScore: number | null;
+  deductionReason: string;
+}
+
+/** 验收记录上的评分项明细快照（详情 / 列表 / 统计共用同一份固化数据）。 */
+export interface AcceptanceScoreItem {
+  id: number;
+  acceptanceId: number;
+  templateId: number;
+  name: string;
+  maxScore: number;
+  actualScore: number;
+  deduction: number;
+  deductionReason: string;
+  sortOrder: number;
+}
+
 export interface AcceptanceRecord {
   id: number;
   code: string;
@@ -270,6 +313,7 @@ export interface AcceptanceRecord {
   inspectorOrg: string;
   result: AcceptanceResult;
   score: number;
+  scoreTemplateId: number | null;
   residualSludgeMm: number;
   issues: string;
   rectification: string;
@@ -282,10 +326,13 @@ export interface AcceptanceRecord {
 
 export interface AcceptanceListItem extends AcceptanceRecord {
   task: TaskBrief | null;
+  scoreItems: AcceptanceScoreItem[];
 }
 
 export interface AcceptanceDetail {
   acceptance: AcceptanceRecord;
+  scoreItems: AcceptanceScoreItem[];
+  template: Pick<ScoreTemplate, 'id' | 'effectiveFrom' | 'remark'> | null;
   task: TaskBrief | null;
   recordTotals: RecordTotals;
 }
@@ -297,11 +344,24 @@ export interface AcceptancePayload {
   inspectorName: string;
   inspectorOrg: string;
   result: AcceptanceResult;
-  score: number;
   residualSludgeMm: number;
+  scoreItems: ScoreItemInput[];
   issues: string;
   rectification: string;
   rectifyDeadline: string | null;
+  remark: string;
+}
+
+export interface TemplateItemPayload {
+  name: string;
+  maxScore: number;
+  sortOrder: number;
+  criteria: string;
+}
+
+export interface CreateTemplatePayload {
+  effectiveFrom: string;
+  items: TemplateItemPayload[];
   remark: string;
 }
 
@@ -309,6 +369,24 @@ export interface RectifyPayload {
   rectifiedAt: string;
   rectification: string;
   remark: string;
+}
+
+/** 运行看板：评分项逐项统计。 */
+export interface ItemScoreStat {
+  templateId: number;
+  sortOrder: number;
+  name: string;
+  maxScore: number;
+  sampleCount: number;
+  averageScore: number;
+  deductedCount: number;
+  deductedRate: number;
+}
+
+export interface AcceptanceScoreStats {
+  total: number;
+  average: number;
+  itemStats: ItemScoreStat[];
 }
 
 // ---------- 看板与元数据 ----------
@@ -329,6 +407,8 @@ export interface Overview {
   acceptancePassCount: number;
   /** 验收合格率，后端已按百分比返回（66.67 表示 66.67%）。 */
   acceptancePassRate: number;
+  /** 验收平均总分，取验收记录主表固化的 score。 */
+  averageAcceptanceScore: number;
   pendingAcceptanceCount: number;
   pendingRectifyCount: number;
 }

@@ -10,7 +10,7 @@ import { StatusTag } from '../../components/StatusTag';
 import { useAsync } from '../../hooks/useAsync';
 import { useMeta } from '../../providers/MetaProvider';
 import type { AcceptanceListItem } from '../../types/domain';
-import { formatDate, formatNumber } from '../../utils/format';
+import { formatDate } from '../../utils/format';
 
 const PAGE_SIZE = 10;
 
@@ -101,15 +101,25 @@ export function AcceptanceListPage() {
     },
     {
       key: 'score',
-      title: '评分 / 残留淤积',
-      width: '140px',
-      align: 'right',
-      render: (row) => (
-        <>
-          <span className="cell-num">{row.score} 分</span>
-          <span className="cell-sub">残留 {formatNumber(row.residualSludgeMm, 1)} mm</span>
-        </>
-      )
+      title: '评分项 / 总分',
+      width: '220px',
+      render: (row) => {
+        const deductions = row.scoreItems.filter((item) => item.deduction > 0);
+        const detail =
+          deductions.length > 0
+            ? deductions.map((item) => `${item.name} -${item.deduction}`).join('；')
+            : row.scoreItems.length > 0
+              ? '各项均为满分'
+              : '历史记录，沿用原总分';
+        return (
+          <>
+            <span className={`cell-num ${row.score < 60 ? 'text-danger' : ''}`}>{row.score} 分</span>
+            <span className="cell-sub" title={detail}>
+              {detail}
+            </span>
+          </>
+        );
+      }
     },
     {
       key: 'inspector',

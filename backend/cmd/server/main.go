@@ -41,13 +41,16 @@ func run() error {
 	if err := database.Migrate(db); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
+	// 在写入演示数据前确保默认评分模板已存在，种子数据会引用它生成评分项明细。
+	services := router.BuildServices(db)
+	router.EnsureDefaultScoreTemplate(services.Acceptances)
 	if cfg.SeedEnabled {
 		if err := database.Seed(db, logger); err != nil {
 			return fmt.Errorf("初始化演示数据失败: %w", err)
 		}
 	}
 
-	app := newApp(cfg, db, logger)
+	app := newApp(cfg, db, logger, services)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -80,7 +83,7 @@ func run() error {
 	}
 }
 
-func newApp(cfg *config.Config, db *gorm.DB, logger *slog.Logger) *fiber.App {
+func newApp(cfg *config.Config, db *gorm.DB, logger *slog.Logger, services *router.Services) *fiber.App {
 	app := fiber.New(fiber.Config{
 		AppName:               "排水管网清淤记录系统",
 		DisableStartupMessage: true,
@@ -98,7 +101,7 @@ func newApp(cfg *config.Config, db *gorm.DB, logger *slog.Logger) *fiber.App {
 	app.Use(middleware.Recover(logger))
 	app.Use(middleware.CORS())
 
-	router.Setup(app, db, cfg)
+	router.SetupWithServices(app, db, cfg, services)
 	return app
 }
 

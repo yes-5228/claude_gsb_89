@@ -34,6 +34,8 @@ export function AcceptanceDetailPage() {
   const acceptance = detail.data?.acceptance;
   const task = detail.data?.task;
   const totals = detail.data?.recordTotals;
+  const scoreItems = detail.data?.scoreItems ?? [];
+  const template = detail.data?.template;
   const needRectify = acceptance?.result === 'rework' && !acceptance.rectifiedAt;
 
   const submitRectify = async () => {
@@ -100,13 +102,96 @@ export function AcceptanceDetailPage() {
               </div>
             ) : null}
 
+            <SectionCard
+              title="验收评分"
+              subtitle={
+                template
+                  ? `按 ${template.effectiveFrom} 起生效的评分模板逐项打分，总分自动汇总`
+                  : '升级前登记的历史验收记录，沿用登记时的总分'
+              }
+            >
+              <div className="score-summary-bar">
+                <span className={`score-total-text ${acceptance.score < 60 ? 'text-danger' : 'text-success'}`}>
+                  验收总分 <strong>{acceptance.score}</strong> / 100 分
+                </span>
+                <StatusTag list="acceptanceResults" value={acceptance.result} />
+                {acceptance.score < 60 ? (
+                  <span className="tag tag-danger">低于合格线 60 分</span>
+                ) : (
+                  <span className="tag tag-success">不低于合格线 60 分</span>
+                )}
+                {template ? <span className="cell-sub">模板生效日期 {template.effectiveFrom}</span> : null}
+              </div>
+              {scoreItems.length === 0 ? (
+                <p className="form-note">
+                  该记录为升级评分项功能前登记的历史验收，没有逐项打分明细，总分保持登记时的 {acceptance.score} 分不变。
+                </p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 48 }}>序号</th>
+                        <th>评分项</th>
+                        <th style={{ width: 110, textAlign: 'right' }}>分值上限</th>
+                        <th style={{ width: 110, textAlign: 'right' }}>实际得分</th>
+                        <th style={{ width: 110, textAlign: 'right' }}>扣分</th>
+                        <th>扣分说明</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {scoreItems.map((item, index) => (
+                        <tr key={item.id}>
+                          <td>{index + 1}</td>
+                          <td>
+                            <span className="cell-main">{item.name}</span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <span className="cell-num">{item.maxScore}</span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <span className={`cell-num ${item.deduction > 0 ? 'text-danger' : ''}`}>
+                              {item.actualScore}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            {item.deduction > 0 ? (
+                              <span className="tag tag-danger">-{item.deduction}</span>
+                            ) : (
+                              <span className="tag tag-muted">0</span>
+                            )}
+                          </td>
+                          <td>{item.deductionReason || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={2}>合计</td>
+                        <td style={{ textAlign: 'right' }} className="cell-num">
+                          {scoreItems.reduce((sum, item) => sum + item.maxScore, 0)}
+                        </td>
+                        <td style={{ textAlign: 'right' }} className="cell-num">
+                          <strong>{acceptance.score}</strong>
+                        </td>
+                        <td style={{ textAlign: 'right' }} className="cell-num">
+                          {scoreItems.reduce((sum, item) => sum + item.deduction, 0)}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </SectionCard>
+
             <SectionCard title="验收结论" subtitle={`登记于 ${formatDateTime(acceptance.createdAt)}`}>
               <InfoList
                 items={[
                   { label: '验收编号', value: acceptance.code },
                   { label: '验收日期', value: formatDate(acceptance.acceptedAt) },
                   { label: '验收结论', value: <StatusTag list="acceptanceResults" value={acceptance.result} /> },
-                  { label: '验收评分', value: `${acceptance.score} 分` },
+                  { label: '验收总分', value: `${acceptance.score} 分（详见上方评分项明细）` },
                   { label: '残留淤积厚度', value: `${formatNumber(acceptance.residualSludgeMm, 1)} mm` },
                   { label: '关联清淤记录', value: acceptance.cleaningRecordId ? `#${acceptance.cleaningRecordId}` : '未指定' },
                   { label: '验收人', value: acceptance.inspectorName },

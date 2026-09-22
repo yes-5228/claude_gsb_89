@@ -10,6 +10,7 @@ import { NotFoundPage } from './features/NotFoundPage';
 import { RecordDetailPage } from './features/records/RecordDetailPage';
 import { RecordFormPage } from './features/records/RecordFormPage';
 import { RecordListPage } from './features/records/RecordListPage';
+import { ScoreTemplateSettingsPage } from './features/settings/ScoreTemplateSettingsPage';
 import { SegmentDetailPage } from './features/segments/SegmentDetailPage';
 import { SegmentFormPage } from './features/segments/SegmentFormPage';
 import { SegmentListPage } from './features/segments/SegmentListPage';
@@ -50,6 +51,9 @@ export function App() {
               <Route path="acceptances" element={<AcceptanceListPage />} />
               <Route path="acceptances/new" element={<AcceptanceFormPage />} />
               <Route path="acceptances/:id" element={<AcceptanceDetailPage />} />
+
+              {/* 系统设置 */}
+              <Route path="settings/score-templates" element={<ScoreTemplateSettingsPage />} />
 
               <Route path="*" element={<NotFoundPage />} />
             </Route>

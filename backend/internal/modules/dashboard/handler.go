@@ -51,3 +51,12 @@ func (h *Handler) RecentRecords(c *fiber.Ctx) error {
 	}
 	return httpx.OK(c, items)
 }
+
+// AcceptanceScoreStats 验收评分项统计。
+func (h *Handler) AcceptanceScoreStats(c *fiber.Ctx) error {
+	stats, err := h.svc.AcceptanceScoreStats(c.UserContext())
+	if err != nil {
+		return err
+	}
+	return httpx.OK(c, stats)
+}

@@ -16,12 +16,13 @@ import (
 
 // Service 看板统计。
 type Service struct {
-	db *gorm.DB
+	db               *gorm.DB
+	acceptanceScores AcceptanceScoreGateway
 }
 
 // NewService 构造服务。
-func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+func NewService(db *gorm.DB, acceptanceScores AcceptanceScoreGateway) *Service {
+	return &Service{db: db, acceptanceScores: acceptanceScores}
 }
 
 // Overview 总览指标。
@@ -43,6 +44,7 @@ type Overview struct {
 	AcceptanceTotal        int64   `json:"acceptanceTotal"`
 	AcceptancePassCount    int64   `json:"acceptancePassCount"`
 	AcceptancePassRate     float64 `json:"acceptancePassRate"`
+	AverageAcceptanceScore float64 `json:"averageAcceptanceScore"`
 	PendingAcceptanceCount int64   `json:"pendingAcceptanceCount"`
 	PendingRectifyCount    int64   `json:"pendingRectifyCount"`
 }
@@ -148,6 +150,15 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 	result.AcceptancePassCount = acceptanceByResult["pass"]
 	if acceptanceTotal > 0 {
 		result.AcceptancePassRate = num.Round2(float64(result.AcceptancePassCount) / float64(acceptanceTotal) * 100)
+	}
+
+	// 平均总分取验收记录主表固化的 score，与详情、列表同源，不按模板实时回算。
+	if s.acceptanceScores != nil {
+		summary, err := s.acceptanceScores.ScoreSummary(ctx)
+		if err != nil {
+			return nil, err
+		}
+		result.AverageAcceptanceScore = summary.AverageScore
 	}
 
 	var pendingRectify int64
@@ -341,6 +352,36 @@ func (s *Service) RecentRecords(ctx context.Context, limit int) ([]RecentRecordI
 		return nil, httpx.WrapInternal("查询最近清淤记录失败", err)
 	}
 	return items, nil
+}
+
+// AcceptanceScoreStatsResponse 验收评分统计：总分汇总 + 各评分项明细。
+type AcceptanceScoreStatsResponse struct {
+	Total     int64                          `json:"total"`
+	Average   float64                        `json:"average"`
+	ItemStats []refx.AcceptanceItemScoreStat `json:"itemStats"`
+}
+
+// AcceptanceScoreStats 验收评分统计（总分与评分项明细均取固化数据，不实时回算模板）。
+func (s *Service) AcceptanceScoreStats(ctx context.Context) (*AcceptanceScoreStatsResponse, error) {
+	if s.acceptanceScores == nil {
+		return &AcceptanceScoreStatsResponse{ItemStats: []refx.AcceptanceItemScoreStat{}}, nil
+	}
+	summary, err := s.acceptanceScores.ScoreSummary(ctx)
+	if err != nil {
+		return nil, httpx.WrapInternal("统计验收总分失败", err)
+	}
+	itemStats, err := s.acceptanceScores.ItemScoreStats(ctx)
+	if err != nil {
+		return nil, httpx.WrapInternal("统计评分项得分失败", err)
+	}
+	if itemStats == nil {
+		itemStats = []refx.AcceptanceItemScoreStat{}
+	}
+	return &AcceptanceScoreStatsResponse{
+		Total:     summary.AcceptanceTotal,
+		Average:   summary.AverageScore,
+		ItemStats: itemStats,
+	}, nil
 }
 
 // countBy 按指定列做分组计数。

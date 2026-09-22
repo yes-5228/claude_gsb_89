@@ -104,6 +104,15 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*AcceptanceRecor
 		}
 	}
 
+	// 按验收日期解析适用的评分模板并逐项打分，总分由各评分项自动汇总。
+	template, templateItems, scoreItems, total, err := s.resolveScoreItems(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateScoreConsistency(req.Result, total); err != nil {
+		return nil, err
+	}
+
 	targetStatus := cleaningtask.StatusAccepted
 	if req.Result == ResultRework {
 		targetStatus = cleaningtask.StatusInProgress
@@ -114,11 +123,21 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*AcceptanceRecor
 
 	record := &AcceptanceRecord{}
 	apply(req, record)
+	record.Score = total
+	templateID := template.ID
+	record.ScoreTemplateID = &templateID
 
 	for attempt := 0; attempt < 5; attempt++ {
 		record.Code = s.nextCode(ctx, record.AcceptedAt)
 		err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
 			if err := s.repo.CreateInTx(ctx, tx, record); err != nil {
+				return err
+			}
+			for i := range scoreItems {
+				scoreItems[i].ID = 0
+				scoreItems[i].AcceptanceID = record.ID
+			}
+			if err := s.repo.CreateScoreItemsInTx(ctx, tx, scoreItems); err != nil {
 				return err
 			}
 			return s.applyOutcome(ctx, tx, task, record, totals)
@@ -195,7 +214,20 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 	if task.Status == cleaningtask.StatusAccepted {
 		return httpx.InvalidState("任务已验收合格，不能再删除验收记录")
 	}
-	if err := s.repo.Delete(ctx, id); err != nil {
+	err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
+		if err := s.repo.DeleteScoreItemsInTx(ctx, tx, id); err != nil {
+			return err
+		}
+		result := tx.WithContext(ctx).Delete(&AcceptanceRecord{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
+	if err != nil {
 		return notFound(err)
 	}
 	return nil
@@ -221,18 +253,30 @@ func (s *Service) List(ctx context.Context, query ListQuery) ([]ListItem, int64,
 	}
 
 	taskIDs := make([]uint, 0, len(records))
+	acceptanceIDs := make([]uint, 0, len(records))
 	for i := range records {
 		taskIDs = append(taskIDs, records[i].TaskID)
+		acceptanceIDs = append(acceptanceIDs, records[i].ID)
 	}
 	briefs, err := refx.TaskBriefsByIDs(ctx, s.repo.DB(), taskIDs)
 	if err != nil {
 		return nil, 0, httpx.WrapInternal("查询任务信息失败", err)
 	}
+	scoreItems, err := s.repo.ScoreItemsByAcceptances(ctx, acceptanceIDs)
+	if err != nil {
+		return nil, 0, httpx.WrapInternal("查询评分项明细失败", err)
+	}
 
 	items := make([]ListItem, 0, len(records))
 	for i := range records {
 		record := records[i]
-		item := ListItem{AcceptanceRecord: record}
+		item := ListItem{
+			AcceptanceRecord: record,
+			ScoreItems:       scoreItems[record.ID],
+		}
+		if item.ScoreItems == nil {
+			item.ScoreItems = []AcceptanceScoreItem{}
+		}
 		if brief, ok := briefs[record.TaskID]; ok {
 			item.Task = &brief
 		}
@@ -248,6 +292,21 @@ func (s *Service) Detail(ctx context.Context, id uint) (*DetailResponse, error) 
 		return nil, err
 	}
 	detail := &DetailResponse{Acceptance: record}
+	scoreItems, err := s.repo.ScoreItemsByAcceptance(ctx, record.ID)
+	if err != nil {
+		return nil, httpx.WrapInternal("查询评分项明细失败", err)
+	}
+	if scoreItems == nil {
+		scoreItems = []AcceptanceScoreItem{}
+	}
+	detail.ScoreItems = scoreItems
+	if record.ScoreTemplateID != nil {
+		template, err := s.repo.FindTemplate(ctx, *record.ScoreTemplateID)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return nil, httpx.WrapInternal("查询评分模板失败", err)
+		}
+		detail.Template = template
+	}
 	briefs, err := refx.TaskBriefsByIDs(ctx, s.repo.DB(), []uint{record.TaskID})
 	if err != nil {
 		return nil, httpx.WrapInternal("查询任务信息失败", err)
@@ -279,6 +338,120 @@ func (s *Service) CountPendingRectify(ctx context.Context) (int64, error) {
 		return 0, httpx.WrapInternal("统计待整改数量失败", err)
 	}
 	return count, nil
+}
+
+// ScoreSummary 验收总分汇总（供看板使用）。
+func (s *Service) ScoreSummary(ctx context.Context) (refx.AcceptanceScoreSummary, error) {
+	summary, err := s.repo.ScoreSummary(ctx)
+	if err != nil {
+		return refx.AcceptanceScoreSummary{}, httpx.WrapInternal("统计验收总分失败", err)
+	}
+	return summary, nil
+}
+
+// ItemScoreStats 评分项得分统计（供看板使用）。
+func (s *Service) ItemScoreStats(ctx context.Context) ([]refx.AcceptanceItemScoreStat, error) {
+	stats, err := s.repo.ItemScoreStats(ctx)
+	if err != nil {
+		return nil, httpx.WrapInternal("统计评分项得分失败", err)
+	}
+	return stats, nil
+}
+
+// resolveScoreItems 按验收日期解析适用模板，并把请求中的逐项打分校验、换算成快照。
+//
+// 返回的 scoreItems 已按模板排序号排好、AcceptanceID 留空（在事务中补写）。
+// 总分 = 各评分项实际得分之和。
+func (s *Service) resolveScoreItems(
+	ctx context.Context,
+	req SaveRequest,
+) (*ScoreTemplateVersion, []ScoreTemplateItem, []AcceptanceScoreItem, int, error) {
+	template, err := s.repo.EffectiveTemplate(ctx, req.AcceptedAt)
+	if err != nil {
+		return nil, nil, nil, 0, httpx.WrapInternal("查询生效评分模板失败", err)
+	}
+	if template == nil {
+		return nil, nil, nil, 0, httpx.InvalidState("该验收日期还没有生效的评分模板，请先在评分项设置中发布模板版本")
+	}
+	templateItems, err := s.repo.TemplateItems(ctx, template.ID)
+	if err != nil {
+		return nil, nil, nil, 0, httpx.WrapInternal("查询评分项失败", err)
+	}
+
+	if len(req.ScoreItems) != len(templateItems) {
+		return nil, nil, nil, 0, httpx.BadRequest(fmt.Sprintf(
+			"评分项明细不完整：适用模板共 %d 个评分项，本次提交 %d 个", len(templateItems), len(req.ScoreItems),
+		))
+	}
+
+	byName := make(map[string]ScoreItemInput, len(req.ScoreItems))
+	for _, input := range req.ScoreItems {
+		name := strings.TrimSpace(input.Name)
+		if name == "" {
+			return nil, nil, nil, 0, httpx.Validation("评分项名称不能为空")
+		}
+		if _, ok := byName[name]; ok {
+			return nil, nil, nil, 0, httpx.Validation("评分项明细存在重复项：" + name)
+		}
+		byName[name] = input
+	}
+
+	scoreItems := make([]AcceptanceScoreItem, 0, len(templateItems))
+	total := 0
+	for _, def := range templateItems {
+		input, ok := byName[def.Name]
+		if !ok {
+			return nil, nil, nil, 0, httpx.BadRequest("缺少评分项「" + def.Name + "」的打分结果")
+		}
+		if input.ActualScore == nil {
+			return nil, nil, nil, 0, httpx.Validation("评分项「" + def.Name + "」的实际得分不能为空")
+		}
+		actual := *input.ActualScore
+		if actual < 0 || actual > def.MaxScore {
+			return nil, nil, nil, 0, httpx.Validation(fmt.Sprintf(
+				"评分项「%s」的实际得分必须在 0 ~ %d 分之间", def.Name, def.MaxScore,
+			))
+		}
+		deduction := def.MaxScore - actual
+		reason := strings.TrimSpace(input.DeductionReason)
+		if deduction > 0 && reason == "" {
+			return nil, nil, nil, 0, httpx.Validation(fmt.Sprintf(
+				"评分项「%s」扣减了 %d 分，必须填写扣分说明", def.Name, deduction,
+			))
+		}
+		if deduction == 0 && reason != "" {
+			return nil, nil, nil, 0, httpx.Validation(fmt.Sprintf(
+				"评分项「%s」得分为满分时不允许填写扣分说明", def.Name,
+			))
+		}
+		scoreItems = append(scoreItems, AcceptanceScoreItem{
+			TemplateID:      template.ID,
+			Name:            def.Name,
+			MaxScore:        def.MaxScore,
+			ActualScore:     actual,
+			Deduction:       deduction,
+			DeductionReason: reason,
+			SortOrder:       def.SortOrder,
+		})
+		total += actual
+	}
+	return template, templateItems, scoreItems, total, nil
+}
+
+// validateScoreConsistency 校验验收结论与自动汇总总分是否一致：
+// 总分低于合格线只能判需整改；合格要求总分不低于合格线。
+func validateScoreConsistency(result string, total int) error {
+	if result == ResultPass && total < passScoreThreshold {
+		return httpx.Validation(fmt.Sprintf(
+			"评分项自动汇总总分为 %d 分，低于合格线 %d 分，验收结论只能选择「需整改」", total, passScoreThreshold,
+		))
+	}
+	if result == ResultRework && total >= passScoreThreshold {
+		return httpx.Validation(fmt.Sprintf(
+			"评分项自动汇总总分为 %d 分，已达到合格线 %d 分，结论不能选择「需整改」，请核对扣分", total, passScoreThreshold,
+		))
+	}
+	return nil
 }
 
 // applyOutcome 根据验收结论联动更新任务状态，验收合格时同步回写管段清淤统计。
@@ -324,11 +497,6 @@ func validate(req SaveRequest) error {
 	if !option.Has(ResultOptions(), result) {
 		return httpx.Validation(fmt.Sprintf("验收结论只能是：%s", option.Labels(ResultOptions())))
 	}
-	if result == ResultPass && req.Score < passScoreThreshold {
-		return httpx.Validation(fmt.Sprintf(
-			"验收评分低于 %d 分不能判定为合格，请选择需整改或修正评分", passScoreThreshold,
-		))
-	}
 	if result != ResultRework {
 		return nil
 	}
@@ -351,7 +519,6 @@ func apply(req SaveRequest, target *AcceptanceRecord) {
 	target.InspectorName = strings.TrimSpace(req.InspectorName)
 	target.InspectorOrg = strings.TrimSpace(req.InspectorOrg)
 	target.Result = strings.TrimSpace(req.Result)
-	target.Score = req.Score
 	target.ResidualSludgeMm = req.ResidualSludgeMm
 	target.Issues = strings.TrimSpace(req.Issues)
 	target.Rectification = strings.TrimSpace(req.Rectification)
