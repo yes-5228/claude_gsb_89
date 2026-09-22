@@ -76,5 +76,8 @@ func Migrate(db *gorm.DB) error {
 		&cleaningtask.CleaningTask{},
 		&cleaningrecord.CleaningRecord{},
 		&acceptance.AcceptanceRecord{},
+		&acceptance.ScoreScheme{},
+		&acceptance.ScoreItem{},
+		&acceptance.AcceptanceScoreDetail{},
 	)
 }

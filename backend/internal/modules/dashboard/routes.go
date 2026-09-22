@@ -15,6 +15,7 @@ func Register(router fiber.Router, db *gorm.DB) *Service {
 	group.Get("/district-stats", handler.DistrictStats)
 	group.Get("/pending-acceptance", handler.PendingAcceptance)
 	group.Get("/recent-records", handler.RecentRecords)
+	group.Get("/score-item-stats", handler.ScoreItemStats)
 
 	return svc
 }

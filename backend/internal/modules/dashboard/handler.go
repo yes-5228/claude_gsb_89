@@ -51,3 +51,12 @@ func (h *Handler) RecentRecords(c *fiber.Ctx) error {
 	}
 	return httpx.OK(c, items)
 }
+
+// ScoreItemStats 评分项统计。
+func (h *Handler) ScoreItemStats(c *fiber.Ctx) error {
+	stats, err := h.svc.ScoreItemStats(c.UserContext())
+	if err != nil {
+		return err
+	}
+	return httpx.OK(c, stats)
+}

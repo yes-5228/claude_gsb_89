@@ -23,15 +23,34 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/records', label: '清淤记录' }
     ]
   },
-  { title: '质量管理', items: [{ to: '/acceptances', label: '验收记录' }] }
+  {
+    title: '质量管理',
+    items: [
+      { to: '/acceptances', label: '验收记录' },
+      { to: '/acceptances/score-schemes', label: '评分项设置' }
+    ]
+  }
 ];
+
+const ALL_NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap((group) => group.items);
 
 /** 根据当前路径推断所属模块，显示在顶部状态条上。 */
 function currentModule(pathname: string): string {
-  const matched = NAV_GROUPS.flatMap((group) => group.items)
-    .filter((item) => item.to !== '/' && pathname.startsWith(item.to))
-    .sort((left, right) => right.to.length - left.to.length)[0];
+  const matched = ALL_NAV_ITEMS.filter((item) => item.to !== '/' && pathname.startsWith(item.to)).sort(
+    (left, right) => right.to.length - left.to.length
+  )[0];
   return matched ? matched.label : '运行看板';
+}
+
+/** 导航高亮：存在更长的路径也匹配当前地址时，由更长的项高亮，避免父子路径两项同时高亮。 */
+function isNavItemActive(item: NavItem, pathname: string): boolean {
+  if (item.end) {
+    return pathname === item.to;
+  }
+  if (!pathname.startsWith(item.to)) {
+    return false;
+  }
+  return !ALL_NAV_ITEMS.some((other) => other.to.length > item.to.length && pathname.startsWith(other.to));
 }
 
 function MetaStatus() {
@@ -75,7 +94,7 @@ export function AppLayout() {
                   key={item.to}
                   to={item.to}
                   end={item.end}
-                  className={({ isActive }) => `nav-link${isActive ? ' nav-link-active' : ''}`}
+                  className={() => `nav-link${isNavItemActive(item, location.pathname) ? ' nav-link-active' : ''}`}
                 >
                   {item.label}
                 </NavLink>

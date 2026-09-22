@@ -260,6 +260,38 @@ export interface RecordPayload {
 
 // ---------- 验收记录 ----------
 
+/** 评分项定义：分值上限 + 扣分说明，隶属于某个评分方案版本。 */
+export interface ScoreItem {
+  id: number;
+  schemeId: number;
+  name: string;
+  maxScore: number;
+  deduction: string;
+  sort: number;
+}
+
+/** 评分方案版本：每次调整评分项生成一个版本，自生效日期起用于新登记的验收。 */
+export interface ScoreScheme {
+  id: number;
+  title: string;
+  effectiveFrom: string | null;
+  remark: string;
+  createdAt: string;
+  items: ScoreItem[];
+}
+
+/** 验收登记时的逐项评分快照：名称、分值上限、扣分说明均为登记时的值。 */
+export interface AcceptanceScoreItem {
+  id: number;
+  acceptanceId: number;
+  itemId: number;
+  name: string;
+  maxScore: number;
+  deduction: string;
+  score: number;
+  sort: number;
+}
+
 export interface AcceptanceRecord {
   id: number;
   code: string;
@@ -269,7 +301,9 @@ export interface AcceptanceRecord {
   inspectorName: string;
   inspectorOrg: string;
   result: AcceptanceResult;
+  /** 总分快照：有评分方案时为评分项汇总值，老记录为手工总分；详情、列表、统计同源。 */
   score: number;
+  schemeId: number | null;
   residualSludgeMm: number;
   issues: string;
   rectification: string;
@@ -282,12 +316,20 @@ export interface AcceptanceRecord {
 
 export interface AcceptanceListItem extends AcceptanceRecord {
   task: TaskBrief | null;
+  scoreItems: AcceptanceScoreItem[];
 }
 
 export interface AcceptanceDetail {
   acceptance: AcceptanceRecord;
   task: TaskBrief | null;
   recordTotals: RecordTotals;
+  scoreItems: AcceptanceScoreItem[];
+  scheme: ScoreScheme | null;
+}
+
+export interface ScoreItemPayload {
+  itemId: number;
+  score: number;
 }
 
 export interface AcceptancePayload {
@@ -298,11 +340,25 @@ export interface AcceptancePayload {
   inspectorOrg: string;
   result: AcceptanceResult;
   score: number;
+  scoreItems: ScoreItemPayload[];
   residualSludgeMm: number;
   issues: string;
   rectification: string;
   rectifyDeadline: string | null;
   remark: string;
+}
+
+export interface SchemeItemPayload {
+  name: string;
+  maxScore: number;
+  deduction: string;
+}
+
+export interface SchemePayload {
+  title: string;
+  effectiveFrom: string;
+  remark: string;
+  items: SchemeItemPayload[];
 }
 
 export interface RectifyPayload {
@@ -329,8 +385,19 @@ export interface Overview {
   acceptancePassCount: number;
   /** 验收合格率，后端已按百分比返回（66.67 表示 66.67%）。 */
   acceptancePassRate: number;
+  /** 验收平均分，按验收记录上的总分快照汇总，与详情页总分同源。 */
+  acceptanceAvgScore: number;
   pendingAcceptanceCount: number;
   pendingRectifyCount: number;
+}
+
+/** 单个评分项的统计：基于验收登记时的逐项评分快照汇总。 */
+export interface ScoreItemStat {
+  name: string;
+  maxScore: number;
+  sampleCount: number;
+  avgScore: number;
+  avgDeduct: number;
 }
 
 export interface DistrictStat {

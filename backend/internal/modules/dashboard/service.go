@@ -43,6 +43,7 @@ type Overview struct {
 	AcceptanceTotal        int64   `json:"acceptanceTotal"`
 	AcceptancePassCount    int64   `json:"acceptancePassCount"`
 	AcceptancePassRate     float64 `json:"acceptancePassRate"`
+	AcceptanceAvgScore     float64 `json:"acceptanceAvgScore"`
 	PendingAcceptanceCount int64   `json:"pendingAcceptanceCount"`
 	PendingRectifyCount    int64   `json:"pendingRectifyCount"`
 }
@@ -149,6 +150,17 @@ func (s *Service) Overview(ctx context.Context) (*Overview, error) {
 	if acceptanceTotal > 0 {
 		result.AcceptancePassRate = num.Round2(float64(result.AcceptancePassCount) / float64(acceptanceTotal) * 100)
 	}
+
+	// 平均分直接汇总验收记录上的总分快照（acceptance_records.score），
+	// 与验收详情、验收列表展示的总分同出一列，不会出现两个口径。
+	var avgScore float64
+	err = s.db.WithContext(ctx).Table(refx.TableAcceptanceRecords).
+		Select("COALESCE(AVG(score), 0)").
+		Scan(&avgScore).Error
+	if err != nil {
+		return nil, httpx.WrapInternal("统计验收平均分失败", err)
+	}
+	result.AcceptanceAvgScore = num.Round2(avgScore)
 
 	var pendingRectify int64
 	err = s.db.WithContext(ctx).Table(refx.TableAcceptanceRecords).
@@ -341,6 +353,41 @@ func (s *Service) RecentRecords(ctx context.Context, limit int) ([]RecentRecordI
 		return nil, httpx.WrapInternal("查询最近清淤记录失败", err)
 	}
 	return items, nil
+}
+
+// ScoreItemStat 单个评分项的统计。
+type ScoreItemStat struct {
+	Name        string  `json:"name"`
+	MaxScore    int     `json:"maxScore"`
+	SampleCount int64   `json:"sampleCount"`
+	AvgScore    float64 `json:"avgScore"`
+	AvgDeduct   float64 `json:"avgDeduct"`
+}
+
+// ScoreItemStats 按评分项汇总历次验收的得分情况。
+//
+// 数据源是验收登记时保存的逐项评分快照（acceptance_score_details），
+// 与验收详情、验收列表展示的明细是同一份数据；评分方案调整后，
+// 历史记录仍按登记时的快照统计，不会被重算。
+func (s *Service) ScoreItemStats(ctx context.Context) ([]ScoreItemStat, error) {
+	stats := make([]ScoreItemStat, 0)
+	err := s.db.WithContext(ctx).Table(refx.TableAcceptanceScoreDetails).
+		Select(`name,
+			MAX(max_score) AS max_score,
+			COUNT(*) AS sample_count,
+			AVG(score) AS avg_score,
+			AVG(max_score - score) AS avg_deduct`).
+		Group("name").
+		Order("MIN(sort) ASC, name ASC").
+		Scan(&stats).Error
+	if err != nil {
+		return nil, httpx.WrapInternal("统计评分项得分失败", err)
+	}
+	for i := range stats {
+		stats[i].AvgScore = num.Round2(stats[i].AvgScore)
+		stats[i].AvgDeduct = num.Round2(stats[i].AvgDeduct)
+	}
+	return stats, nil
 }
 
 // countBy 按指定列做分组计数。

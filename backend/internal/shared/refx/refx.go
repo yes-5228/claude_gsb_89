@@ -17,10 +17,11 @@ import (
 
 // 各模块的表名。
 const (
-	TablePipeSegments      = "pipe_segments"
-	TableCleaningTasks     = "cleaning_tasks"
-	TableCleaningRecords   = "cleaning_records"
-	TableAcceptanceRecords = "acceptance_records"
+	TablePipeSegments           = "pipe_segments"
+	TableCleaningTasks          = "cleaning_tasks"
+	TableCleaningRecords        = "cleaning_records"
+	TableAcceptanceRecords      = "acceptance_records"
+	TableAcceptanceScoreDetails = "acceptance_score_details"
 )
 
 // TaskStats 某个管段下的清淤任务数量汇总。

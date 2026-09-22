@@ -8,6 +8,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/drainage/desilting/internal/shared/date"
 	"github.com/drainage/desilting/internal/shared/refx"
 )
 
@@ -45,16 +46,21 @@ func (r *Repository) Save(ctx context.Context, record *AcceptanceRecord) error {
 	return r.db.WithContext(ctx).Save(record).Error
 }
 
-// Delete 物理删除验收记录。
+// Delete 物理删除验收记录，并一并清理其评分明细，避免孤立明细混入评分项统计。
 func (r *Repository) Delete(ctx context.Context, id uint) error {
-	result := r.db.WithContext(ctx).Delete(&AcceptanceRecord{}, id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("acceptance_id = ?", id).Delete(&AcceptanceScoreDetail{}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&AcceptanceRecord{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // FindByID 按主键查询。
@@ -108,6 +114,96 @@ func (r *Repository) CleaningRecordBelongsToTask(ctx context.Context, recordID, 
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// ---------- 评分方案与评分明细 ----------
+
+// CreateScheme 保存新的评分方案版本及其评分项。
+func (r *Repository) CreateScheme(ctx context.Context, scheme *ScoreScheme) error {
+	return r.db.WithContext(ctx).Create(scheme).Error
+}
+
+// LatestScheme 查询生效日期最新的方案版本，没有时返回 nil。
+func (r *Repository) LatestScheme(ctx context.Context) (*ScoreScheme, error) {
+	var scheme ScoreScheme
+	err := r.db.WithContext(ctx).
+		Order("effective_from DESC, id DESC").
+		Limit(1).
+		Find(&scheme).Error
+	if err != nil {
+		return nil, err
+	}
+	if scheme.ID == 0 {
+		return nil, nil
+	}
+	return &scheme, nil
+}
+
+// SchemeEffectiveAt 查询在指定日期生效的评分方案（生效日期不晚于该日的最新版本），
+// 没有时返回 nil。评分项按 sort 升序预加载。
+func (r *Repository) SchemeEffectiveAt(ctx context.Context, day date.Date) (*ScoreScheme, error) {
+	var scheme ScoreScheme
+	err := r.db.WithContext(ctx).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("sort ASC, id ASC") }).
+		Where("effective_from <= ?", day.Time).
+		Order("effective_from DESC, id DESC").
+		Limit(1).
+		Find(&scheme).Error
+	if err != nil {
+		return nil, err
+	}
+	if scheme.ID == 0 {
+		return nil, nil
+	}
+	return &scheme, nil
+}
+
+// SchemeByID 按主键查询方案（不含评分项，详情页只需要方案名称与生效日期）。
+func (r *Repository) SchemeByID(ctx context.Context, id uint) (*ScoreScheme, error) {
+	var scheme ScoreScheme
+	err := r.db.WithContext(ctx).First(&scheme, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &scheme, nil
+}
+
+// ListSchemes 查询全部方案版本，按生效日期倒序（最新版本在前）。
+func (r *Repository) ListSchemes(ctx context.Context) ([]ScoreScheme, error) {
+	schemes := make([]ScoreScheme, 0)
+	err := r.db.WithContext(ctx).
+		Preload("Items", func(db *gorm.DB) *gorm.DB { return db.Order("sort ASC, id ASC") }).
+		Order("effective_from DESC, id DESC").
+		Find(&schemes).Error
+	return schemes, err
+}
+
+// CreateDetailsInTx 在事务中写入验收记录的逐项评分快照。
+func (r *Repository) CreateDetailsInTx(ctx context.Context, tx *gorm.DB, details []AcceptanceScoreDetail) error {
+	return tx.WithContext(ctx).Create(&details).Error
+}
+
+// DetailsByAcceptanceIDs 批量查询验收记录的评分明细快照，按验收记录 ID 分组。
+func (r *Repository) DetailsByAcceptanceIDs(ctx context.Context, acceptanceIDs []uint) (map[uint][]AcceptanceScoreDetail, error) {
+	result := make(map[uint][]AcceptanceScoreDetail, len(acceptanceIDs))
+	if len(acceptanceIDs) == 0 {
+		return result, nil
+	}
+	details := make([]AcceptanceScoreDetail, 0)
+	err := r.db.WithContext(ctx).
+		Where("acceptance_id IN ?", acceptanceIDs).
+		Order("sort ASC, id ASC").
+		Find(&details).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range details {
+		result[item.AcceptanceID] = append(result[item.AcceptanceID], item)
+	}
+	return result, nil
 }
 
 // List 分页查询验收记录。

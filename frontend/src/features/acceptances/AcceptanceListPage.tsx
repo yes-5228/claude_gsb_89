@@ -102,11 +102,17 @@ export function AcceptanceListPage() {
     {
       key: 'score',
       title: '评分 / 残留淤积',
-      width: '140px',
-      align: 'right',
+      width: '230px',
       render: (row) => (
         <>
           <span className="cell-num">{row.score} 分</span>
+          {row.scoreItems.length > 0 ? (
+            <span className="cell-sub">
+              {row.scoreItems.map((item) => `${item.name} ${item.score}/${item.maxScore}`).join(' · ')}
+            </span>
+          ) : (
+            <span className="cell-sub">评分项启用前登记，无明细</span>
+          )}
           <span className="cell-sub">残留 {formatNumber(row.residualSludgeMm, 1)} mm</span>
         </>
       )
@@ -169,9 +175,14 @@ export function AcceptanceListPage() {
         title="验收记录"
         description="对完工报验的清淤任务登记验收结论；验收合格后任务归档且管段清淤次数自动累计，需整改的任务回到清淤中。"
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => navigate('/acceptances/new')}>
-            登记验收
-          </button>
+          <>
+            <button type="button" className="btn btn-ghost" onClick={() => navigate('/acceptances/score-schemes')}>
+              评分项设置
+            </button>
+            <button type="button" className="btn btn-primary" onClick={() => navigate('/acceptances/new')}>
+              登记验收
+            </button>
+          </>
         }
       />
 

@@ -3,7 +3,9 @@ import type {
   AcceptanceListItem,
   AcceptancePayload,
   PageResult,
-  RectifyPayload
+  RectifyPayload,
+  SchemePayload,
+  ScoreScheme
 } from '../types/domain';
 import { buildQuery, http } from './client';
 
@@ -26,5 +28,9 @@ export const acceptanceApi = {
   detail: (id: number) => http.get<AcceptanceDetail>(`/acceptances/${id}`),
   create: (payload: AcceptancePayload) => http.post<{ id: number }>('/acceptances', payload),
   rectify: (id: number, payload: RectifyPayload) => http.post<{ id: number }>(`/acceptances/${id}/rectify`, payload),
-  remove: (id: number) => http.del<{ id: number }>(`/acceptances/${id}`)
+  remove: (id: number) => http.del<{ id: number }>(`/acceptances/${id}`),
+  schemes: () => http.get<ScoreScheme[]>('/acceptances/score-schemes'),
+  effectiveScheme: (date?: string) =>
+    http.get<ScoreScheme | null>(`/acceptances/score-schemes/effective${buildQuery({ date })}`),
+  createScheme: (payload: SchemePayload) => http.post<{ id: number }>('/acceptances/score-schemes', payload)
 };

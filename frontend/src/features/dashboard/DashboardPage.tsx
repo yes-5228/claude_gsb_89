@@ -8,7 +8,7 @@ import { StatCard } from '../../components/StatCard';
 import { StateBlock } from '../../components/StateBlock';
 import { useAsync } from '../../hooks/useAsync';
 import { useMeta } from '../../providers/MetaProvider';
-import type { DistrictStat, PendingAcceptanceItem, RecentRecordItem } from '../../types/domain';
+import type { DistrictStat, PendingAcceptanceItem, RecentRecordItem, ScoreItemStat } from '../../types/domain';
 import { formatDate, formatLength, formatNumber, formatPercent, formatVolume } from '../../utils/format';
 import { optionLabel } from '../../utils/options';
 
@@ -93,6 +93,31 @@ const recentColumns: Column<RecentRecordItem>[] = [
   { key: 'sludgeVolumeM3', title: '清淤量', width: '110px', align: 'right', render: (row) => formatVolume(row.sludgeVolumeM3) }
 ];
 
+const scoreItemColumns: Column<ScoreItemStat>[] = [
+  { key: 'name', title: '评分项', render: (row) => <span className="cell-main">{row.name}</span> },
+  { key: 'maxScore', title: '分值上限', width: '110px', align: 'right', render: (row) => `${row.maxScore} 分` },
+  {
+    key: 'avgScore',
+    title: '平均得分',
+    width: '110px',
+    align: 'right',
+    render: (row) => <span className="cell-num">{formatNumber(row.avgScore, 1)} 分</span>
+  },
+  {
+    key: 'avgDeduct',
+    title: '平均扣分',
+    width: '110px',
+    align: 'right',
+    render: (row) =>
+      row.avgDeduct > 0 ? (
+        <span className="tag tag-warn">-{formatNumber(row.avgDeduct, 1)} 分</span>
+      ) : (
+        <span className="tag tag-success">无扣分</span>
+      )
+  },
+  { key: 'sampleCount', title: '评分次数', width: '100px', align: 'right', render: (row) => formatNumber(row.sampleCount, 0) }
+];
+
 export function DashboardPage() {
   const navigate = useNavigate();
   const { enums } = useMeta();
@@ -100,6 +125,7 @@ export function DashboardPage() {
   const districts = useAsync(() => dashboardApi.districtStats(), []);
   const pending = useAsync(() => dashboardApi.pendingAcceptance(6), []);
   const recent = useAsync(() => dashboardApi.recentRecords(6), []);
+  const scoreItems = useAsync(() => dashboardApi.scoreItemStats(), []);
 
   const data = overview.data;
   const taskStatusBars: BarItem[] = enums
@@ -184,6 +210,12 @@ export function DashboardPage() {
             tone="success"
             onClick={() => navigate('/acceptances')}
           />
+          <StatCard
+            label="验收平均分"
+            value={`${formatNumber(data?.acceptanceAvgScore ?? 0, 1)} 分`}
+            hint="按验收记录总分汇总，与验收详情同源"
+            onClick={() => navigate('/acceptances')}
+          />
         </div>
       </StateBlock>
 
@@ -248,6 +280,25 @@ export function DashboardPage() {
           </div>
         </SectionCard>
       </div>
+
+      <SectionCard
+        title="验收评分项统计"
+        subtitle="按评分项汇总历次验收得分，数据取自验收登记时的评分快照，与验收详情、验收列表同源"
+        extra={<Link className="link" to="/acceptances/score-schemes">评分项设置</Link>}
+      >
+        <div className="card-body-flush">
+          <DataTable
+            columns={scoreItemColumns}
+            rows={scoreItems.data ?? []}
+            rowKey={(row) => row.name}
+            loading={scoreItems.loading}
+            error={scoreItems.error}
+            onRetry={scoreItems.reload}
+            emptyText="暂无评分项统计数据"
+            emptyDescription="登记带逐项评分的验收记录后，这里会按评分项汇总平均得分与扣分。"
+          />
+        </div>
+      </SectionCard>
 
       <p className="form-note">
         说明：验收合格率 = 合格验收次数 / 验收总次数；未清淤管段指尚无「验收合格」记录的管段，

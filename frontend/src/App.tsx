@@ -5,6 +5,7 @@ import { ToastProvider } from './components/Toast';
 import { AcceptanceDetailPage } from './features/acceptances/AcceptanceDetailPage';
 import { AcceptanceFormPage } from './features/acceptances/AcceptanceFormPage';
 import { AcceptanceListPage } from './features/acceptances/AcceptanceListPage';
+import { ScoreSchemesPage } from './features/acceptances/ScoreSchemesPage';
 import { DashboardPage } from './features/dashboard/DashboardPage';
 import { NotFoundPage } from './features/NotFoundPage';
 import { RecordDetailPage } from './features/records/RecordDetailPage';
@@ -49,6 +50,7 @@ export function App() {
               {/* 验收记录 */}
               <Route path="acceptances" element={<AcceptanceListPage />} />
               <Route path="acceptances/new" element={<AcceptanceFormPage />} />
+              <Route path="acceptances/score-schemes" element={<ScoreSchemesPage />} />
               <Route path="acceptances/:id" element={<AcceptanceDetailPage />} />
 
               <Route path="*" element={<NotFoundPage />} />

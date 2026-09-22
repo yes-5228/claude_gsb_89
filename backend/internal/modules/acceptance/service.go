@@ -19,6 +19,7 @@ import (
 )
 
 // 验收评分与结论的一致性要求：合格的任务评分不应低于该阈值。
+// 低于合格线的验收结论只能登记为需整改，并强制填写存在问题与整改期限。
 const passScoreThreshold = 60
 
 // TaskGateway 清淤任务模块对外提供的能力（由 cleaningtask.Service 实现）。
@@ -91,7 +92,18 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*AcceptanceRecor
 		}
 	}
 
-	if err := validate(req); err != nil {
+	// 按验收日期匹配生效的评分方案：有方案则逐项打分并自动汇总总分，
+	// 没有方案（验收日期早于首个方案生效日期）则沿用手工总分。
+	scheme, err := s.repo.SchemeEffectiveAt(ctx, req.AcceptedAt)
+	if err != nil {
+		return nil, httpx.WrapInternal("查询评分方案失败", err)
+	}
+	details, total, err := buildScoreDetails(scheme, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validate(req, total); err != nil {
 		return nil, err
 	}
 	if req.CleaningRecordID != nil {
@@ -114,12 +126,24 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (*AcceptanceRecor
 
 	record := &AcceptanceRecord{}
 	apply(req, record)
+	record.Score = total
+	if scheme != nil {
+		record.SchemeID = &scheme.ID
+	}
 
 	for attempt := 0; attempt < 5; attempt++ {
 		record.Code = s.nextCode(ctx, record.AcceptedAt)
 		err = s.repo.Transaction(ctx, func(tx *gorm.DB) error {
 			if err := s.repo.CreateInTx(ctx, tx, record); err != nil {
 				return err
+			}
+			if len(details) > 0 {
+				for i := range details {
+					details[i].AcceptanceID = record.ID
+				}
+				if err := s.repo.CreateDetailsInTx(ctx, tx, details); err != nil {
+					return err
+				}
 			}
 			return s.applyOutcome(ctx, tx, task, record, totals)
 		})
@@ -221,12 +245,18 @@ func (s *Service) List(ctx context.Context, query ListQuery) ([]ListItem, int64,
 	}
 
 	taskIDs := make([]uint, 0, len(records))
+	acceptanceIDs := make([]uint, 0, len(records))
 	for i := range records {
 		taskIDs = append(taskIDs, records[i].TaskID)
+		acceptanceIDs = append(acceptanceIDs, records[i].ID)
 	}
 	briefs, err := refx.TaskBriefsByIDs(ctx, s.repo.DB(), taskIDs)
 	if err != nil {
 		return nil, 0, httpx.WrapInternal("查询任务信息失败", err)
+	}
+	detailsByID, err := s.repo.DetailsByAcceptanceIDs(ctx, acceptanceIDs)
+	if err != nil {
+		return nil, 0, httpx.WrapInternal("查询评分明细失败", err)
 	}
 
 	items := make([]ListItem, 0, len(records))
@@ -235,6 +265,11 @@ func (s *Service) List(ctx context.Context, query ListQuery) ([]ListItem, int64,
 		item := ListItem{AcceptanceRecord: record}
 		if brief, ok := briefs[record.TaskID]; ok {
 			item.Task = &brief
+		}
+		// 评分明细是登记时的快照，老记录没有明细时返回空数组而不是 null。
+		item.ScoreItems = detailsByID[record.ID]
+		if item.ScoreItems == nil {
+			item.ScoreItems = []AcceptanceScoreDetail{}
 		}
 		items = append(items, item)
 	}
@@ -260,6 +295,22 @@ func (s *Service) Detail(ctx context.Context, id uint) (*DetailResponse, error) 
 		return nil, err
 	}
 	detail.RecordTotals = totals
+
+	detailsByID, err := s.repo.DetailsByAcceptanceIDs(ctx, []uint{record.ID})
+	if err != nil {
+		return nil, httpx.WrapInternal("查询评分明细失败", err)
+	}
+	detail.ScoreItems = detailsByID[record.ID]
+	if detail.ScoreItems == nil {
+		detail.ScoreItems = []AcceptanceScoreDetail{}
+	}
+	if record.SchemeID != nil {
+		scheme, err := s.repo.SchemeByID(ctx, *record.SchemeID)
+		if err != nil {
+			return nil, httpx.WrapInternal("查询评分方案失败", err)
+		}
+		detail.Scheme = scheme
+	}
 	return detail, nil
 }
 
@@ -279,6 +330,101 @@ func (s *Service) CountPendingRectify(ctx context.Context) (int64, error) {
 		return 0, httpx.WrapInternal("统计待整改数量失败", err)
 	}
 	return count, nil
+}
+
+// ---------- 评分方案 ----------
+
+// EffectiveScheme 查询指定日期生效的评分方案，没有生效方案时返回 nil。
+func (s *Service) EffectiveScheme(ctx context.Context, day date.Date) (*ScoreScheme, error) {
+	scheme, err := s.repo.SchemeEffectiveAt(ctx, day)
+	if err != nil {
+		return nil, httpx.WrapInternal("查询评分方案失败", err)
+	}
+	return scheme, nil
+}
+
+// ListSchemes 查询全部评分方案版本（含评分项），按生效日期倒序。
+func (s *Service) ListSchemes(ctx context.Context) ([]ScoreScheme, error) {
+	schemes, err := s.repo.ListSchemes(ctx)
+	if err != nil {
+		return nil, httpx.WrapInternal("查询评分方案失败", err)
+	}
+	return schemes, nil
+}
+
+// CreateScheme 调整评分项：新增一个方案版本，自生效日期起用于新登记的验收。
+//
+// 方案只能往后追加（生效日期必须晚于现行版本），历史版本与其下登记的
+// 验收记录保持原样，保证同一条验收记录的总分在任何页面都一致。
+func (s *Service) CreateScheme(ctx context.Context, req SaveSchemeRequest) (*ScoreScheme, error) {
+	if err := validateScheme(req); err != nil {
+		return nil, err
+	}
+	latest, err := s.repo.LatestScheme(ctx)
+	if err != nil {
+		return nil, httpx.WrapInternal("查询现行评分方案失败", err)
+	}
+	if latest != nil && !req.EffectiveFrom.After(latest.EffectiveFrom) {
+		return nil, httpx.Validation(fmt.Sprintf(
+			"生效日期必须晚于现行方案「%s」的生效日期（%s）", latest.Title, latest.EffectiveFrom.String(),
+		))
+	}
+
+	scheme := &ScoreScheme{
+		Title:         strings.TrimSpace(req.Title),
+		EffectiveFrom: req.EffectiveFrom,
+		Remark:        strings.TrimSpace(req.Remark),
+		Items:         make([]ScoreItem, 0, len(req.Items)),
+	}
+	for i, item := range req.Items {
+		scheme.Items = append(scheme.Items, ScoreItem{
+			Name:      strings.TrimSpace(item.Name),
+			MaxScore:  item.MaxScore,
+			Deduction: strings.TrimSpace(item.Deduction),
+			Sort:      i + 1,
+		})
+	}
+	if err := s.repo.CreateScheme(ctx, scheme); err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return nil, httpx.Conflict(fmt.Sprintf("生效日期 %s 已存在评分方案，请选择其他日期", req.EffectiveFrom.String()))
+		}
+		return nil, httpx.WrapInternal("保存评分方案失败", err)
+	}
+	return scheme, nil
+}
+
+// validateScheme 校验方案版本：评分项不能为空、名称不重复、分值上限合计为 100 分。
+func validateScheme(req SaveSchemeRequest) error {
+	if req.EffectiveFrom.IsZero() {
+		return httpx.Validation("生效日期不能为空")
+	}
+	if len(req.Items) == 0 {
+		return httpx.Validation("评分项不能为空")
+	}
+	seen := make(map[string]bool, len(req.Items))
+	total := 0
+	for _, item := range req.Items {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return httpx.Validation("评分项名称不能为空")
+		}
+		if seen[name] {
+			return httpx.Validation(fmt.Sprintf("评分项「%s」重复，请合并或改名", name))
+		}
+		seen[name] = true
+		if item.MaxScore <= 0 || item.MaxScore > schemeTotalScore {
+			return httpx.Validation(fmt.Sprintf(
+				"评分项「%s」的分值上限需在 1 ~ %d 分之间", name, schemeTotalScore,
+			))
+		}
+		total += item.MaxScore
+	}
+	if total != schemeTotalScore {
+		return httpx.Validation(fmt.Sprintf(
+			"各评分项分值上限之和必须等于 %d 分，当前合计 %d 分", schemeTotalScore, total,
+		))
+	}
+	return nil
 }
 
 // applyOutcome 根据验收结论联动更新任务状态，验收合格时同步回写管段清淤统计。
@@ -313,7 +459,8 @@ func (s *Service) applyOutcome(
 }
 
 // validate 校验验收字段，并保证验收结论与评分、整改要求相互一致。
-func validate(req SaveRequest) error {
+// score 是登记时确定的总分（有评分方案时为评分项汇总值，否则为手工填写的总分）。
+func validate(req SaveRequest, score int) error {
 	if req.AcceptedAt.IsZero() {
 		return httpx.Validation("验收日期不能为空")
 	}
@@ -324,7 +471,7 @@ func validate(req SaveRequest) error {
 	if !option.Has(ResultOptions(), result) {
 		return httpx.Validation(fmt.Sprintf("验收结论只能是：%s", option.Labels(ResultOptions())))
 	}
-	if result == ResultPass && req.Score < passScoreThreshold {
+	if result == ResultPass && score < passScoreThreshold {
 		return httpx.Validation(fmt.Sprintf(
 			"验收评分低于 %d 分不能判定为合格，请选择需整改或修正评分", passScoreThreshold,
 		))
@@ -344,6 +491,60 @@ func validate(req SaveRequest) error {
 	return nil
 }
 
+// buildScoreDetails 根据生效的评分方案逐项核对打分并汇总总分。
+//
+// 返回的明细是快照：评分项的名称、分值上限、扣分说明在登记时复制保存，
+// 之后调整评分方案不会改变这条记录的明细与总分。
+func buildScoreDetails(scheme *ScoreScheme, req SaveRequest) ([]AcceptanceScoreDetail, int, error) {
+	if scheme == nil {
+		if len(req.ScoreItems) > 0 {
+			return nil, 0, httpx.Validation("验收日期早于评分方案的生效日期，没有可打分的评分项，请直接填写验收评分")
+		}
+		return nil, req.Score, nil
+	}
+	if len(req.ScoreItems) == 0 {
+		return nil, 0, httpx.Validation(fmt.Sprintf(
+			"验收日期已启用评分方案「%s」，请逐项评分，总分由评分项自动汇总", scheme.Title,
+		))
+	}
+
+	inputs := make(map[uint]ScoreItemInput, len(req.ScoreItems))
+	for _, input := range req.ScoreItems {
+		if _, duplicated := inputs[input.ItemID]; duplicated {
+			return nil, 0, httpx.Validation("同一评分项不能重复打分")
+		}
+		inputs[input.ItemID] = input
+	}
+
+	details := make([]AcceptanceScoreDetail, 0, len(scheme.Items))
+	total := 0
+	for _, item := range scheme.Items {
+		input, ok := inputs[item.ID]
+		if !ok {
+			return nil, 0, httpx.Validation(fmt.Sprintf("评分项「%s」尚未打分", item.Name))
+		}
+		if input.Score < 0 || input.Score > item.MaxScore {
+			return nil, 0, httpx.Validation(fmt.Sprintf(
+				"评分项「%s」得分需在 0 ~ %d 分之间", item.Name, item.MaxScore,
+			))
+		}
+		total += input.Score
+		details = append(details, AcceptanceScoreDetail{
+			ItemID:    item.ID,
+			Name:      item.Name,
+			MaxScore:  item.MaxScore,
+			Deduction: item.Deduction,
+			Score:     input.Score,
+			Sort:      item.Sort,
+		})
+		delete(inputs, item.ID)
+	}
+	if len(inputs) > 0 {
+		return nil, 0, httpx.Validation("评分项与当前生效的评分方案不一致，请刷新后重新评分")
+	}
+	return details, total, nil
+}
+
 func apply(req SaveRequest, target *AcceptanceRecord) {
 	target.TaskID = req.TaskID
 	target.CleaningRecordID = req.CleaningRecordID
@@ -351,7 +552,6 @@ func apply(req SaveRequest, target *AcceptanceRecord) {
 	target.InspectorName = strings.TrimSpace(req.InspectorName)
 	target.InspectorOrg = strings.TrimSpace(req.InspectorOrg)
 	target.Result = strings.TrimSpace(req.Result)
-	target.Score = req.Score
 	target.ResidualSludgeMm = req.ResidualSludgeMm
 	target.Issues = strings.TrimSpace(req.Issues)
 	target.Rectification = strings.TrimSpace(req.Rectification)

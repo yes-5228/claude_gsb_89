@@ -11,6 +11,10 @@ func Register(router fiber.Router, db *gorm.DB, tasks TaskGateway, segments Segm
 	handler := NewHandler(svc)
 
 	group := router.Group("/acceptances")
+	// 评分方案路由登记在 /:id 之前，避免被当成验收记录 ID。
+	group.Get("/score-schemes", handler.ListSchemes)
+	group.Post("/score-schemes", handler.CreateScheme)
+	group.Get("/score-schemes/effective", handler.EffectiveScheme)
 	group.Get("", handler.List)
 	group.Post("", handler.Create)
 	group.Get("/:id", handler.Detail)

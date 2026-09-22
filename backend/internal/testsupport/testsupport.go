@@ -200,3 +200,42 @@ func ReworkRequest(taskID uint) acceptance.SaveRequest {
 		RectifyDeadline:  &deadline,
 	}
 }
+
+// ItemizedRequest 构造一份按方案逐项打分的验收请求，scores 按方案评分项顺序给出。
+func ItemizedRequest(taskID uint, scheme *acceptance.ScoreScheme, scores ...int) acceptance.SaveRequest {
+	req := PassRequest(taskID, 0)
+	req.ScoreItems = make([]acceptance.ScoreItemInput, 0, len(scheme.Items))
+	for i, item := range scheme.Items {
+		score := 0
+		if i < len(scores) {
+			score = scores[i]
+		}
+		req.ScoreItems = append(req.ScoreItems, acceptance.ScoreItemInput{ItemID: item.ID, Score: score})
+	}
+	return req
+}
+
+// SchemeRequest 构造一份评分方案请求：5 个评分项合计 100 分，默认今天生效。
+func SchemeRequest() acceptance.SaveSchemeRequest {
+	return acceptance.SaveSchemeRequest{
+		Title:         "测试评分方案",
+		EffectiveFrom: date.Today(),
+		Items: []acceptance.SchemeItemInput{
+			{Name: "清淤洁净度", MaxScore: 40, Deduction: "残留淤积超标扣分"},
+			{Name: "过水断面恢复", MaxScore: 20, Deduction: "断面未恢复按比例扣分"},
+			{Name: "检查井清掏", MaxScore: 15, Deduction: "井内遗留杂物每处扣分"},
+			{Name: "淤泥外运与消纳", MaxScore: 15, Deduction: "消纳手续不全扣分"},
+			{Name: "安全文明施工", MaxScore: 10, Deduction: "安全措施缺失扣分"},
+		},
+	}
+}
+
+// CreateScheme 创建评分方案版本。
+func (s *Services) CreateScheme(t *testing.T, req acceptance.SaveSchemeRequest) *acceptance.ScoreScheme {
+	t.Helper()
+	scheme, err := s.Acceptances.CreateScheme(context.Background(), req)
+	if err != nil {
+		t.Fatalf("创建评分方案失败: %v", err)
+	}
+	return scheme
+}

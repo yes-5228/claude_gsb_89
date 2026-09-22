@@ -1,8 +1,9 @@
-// 验收详情：验收结论明细 + 清淤成果汇总 + 整改登记。
+// 验收详情：验收结论明细 + 逐项评分 + 清淤成果汇总 + 整改登记。
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { acceptanceApi } from '../../api/acceptances';
 import { toErrorMessage } from '../../api/client';
+import { DataTable, type Column } from '../../components/DataTable';
 import { InfoList } from '../../components/InfoList';
 import { Modal } from '../../components/Modal';
 import { PageHeader } from '../../components/PageHeader';
@@ -12,7 +13,33 @@ import { StatusTag } from '../../components/StatusTag';
 import { StateBlock } from '../../components/StateBlock';
 import { useToast } from '../../components/Toast';
 import { useAsync } from '../../hooks/useAsync';
+import type { AcceptanceScoreItem } from '../../types/domain';
 import { formatDate, formatDateTime, formatLength, formatNumber, formatVolume, today } from '../../utils/format';
+
+const scoreItemColumns: Column<AcceptanceScoreItem>[] = [
+  { key: 'name', title: '评分项', render: (row) => <span className="cell-main">{row.name}</span> },
+  { key: 'maxScore', title: '分值上限', width: '90px', align: 'right', render: (row) => `${row.maxScore} 分` },
+  { key: 'deduction', title: '扣分说明', render: (row) => row.deduction || '—' },
+  {
+    key: 'score',
+    title: '得分',
+    width: '90px',
+    align: 'right',
+    render: (row) => <span className="cell-num">{row.score} 分</span>
+  },
+  {
+    key: 'deducted',
+    title: '扣分',
+    width: '80px',
+    align: 'right',
+    render: (row) =>
+      row.maxScore - row.score > 0 ? (
+        <span className="tag tag-danger">-{row.maxScore - row.score} 分</span>
+      ) : (
+        <span className="tag tag-success">满分</span>
+      )
+  }
+];
 
 export function AcceptanceDetailPage() {
   const params = useParams();
@@ -34,6 +61,9 @@ export function AcceptanceDetailPage() {
   const acceptance = detail.data?.acceptance;
   const task = detail.data?.task;
   const totals = detail.data?.recordTotals;
+  const scoreItems = detail.data?.scoreItems ?? [];
+  const scheme = detail.data?.scheme ?? null;
+  const scoreItemTotal = scoreItems.reduce((sum, item) => sum + item.maxScore, 0);
   const needRectify = acceptance?.result === 'rework' && !acceptance.rectifiedAt;
 
   const submitRectify = async () => {
@@ -118,6 +148,33 @@ export function AcceptanceDetailPage() {
                   { label: '备注', value: acceptance.remark || '—', span: 3 }
                 ]}
               />
+            </SectionCard>
+
+            <SectionCard
+              title="评分明细"
+              subtitle={
+                scheme
+                  ? `评分方案：${scheme.title}（${formatDate(scheme.effectiveFrom)} 起生效），明细为登记时快照`
+                  : '该记录登记于评分项启用前'
+              }
+            >
+              {scoreItems.length > 0 ? (
+                <>
+                  <div className="card-body-flush">
+                    <DataTable columns={scoreItemColumns} rows={scoreItems} rowKey={(row) => row.id} />
+                  </div>
+                  <div style={{ height: 12 }} />
+                  <p className="form-note">
+                    合计得分 {acceptance.score} 分（满分 {scoreItemTotal} 分），与验收结论中的总分一致；
+                    评分项后续调整不影响本记录的明细与总分。
+                  </p>
+                </>
+              ) : (
+                <p className="form-note">
+                  该记录登记于评分项启用前，仅登记总分 {acceptance.score} 分，无逐项评分明细；
+                  启用评分项后总分保持原值不变。
+                </p>
+              )}
             </SectionCard>
 
             <SectionCard

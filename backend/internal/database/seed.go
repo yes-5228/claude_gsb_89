@@ -279,11 +279,30 @@ func Seed(db *gorm.DB, logger *slog.Logger) error {
 			return err
 		}
 
+		// 首版评分方案自今天起生效：此前登记的验收记录（上面的演示数据）保持
+		// 原有手工总分、没有评分明细；今天起新登记的验收按评分项逐项打分。
+		scheme := acceptance.ScoreScheme{
+			Title:         "验收评分标准（2026 版）",
+			EffectiveFrom: today,
+			Remark:        "首版评分项，自生效日期起登记的验收按评分项逐项打分，总分自动汇总",
+			Items: []acceptance.ScoreItem{
+				{Name: "清淤洁净度", MaxScore: 40, Sort: 1, Deduction: "残留淤积厚度超过 20mm 起扣，每超 5mm 扣 5 分，扣完为止"},
+				{Name: "过水断面恢复", MaxScore: 20, Sort: 2, Deduction: "过水断面未恢复至设计要求的，按未恢复比例扣分"},
+				{Name: "检查井清掏", MaxScore: 15, Sort: 3, Deduction: "井底、井壁遗留淤泥或杂物的，每处扣 3 分"},
+				{Name: "淤泥外运与消纳", MaxScore: 15, Sort: 4, Deduction: "消纳手续不全或运输沿途遗撒的，酌情扣分"},
+				{Name: "安全文明施工", MaxScore: 10, Sort: 5, Deduction: "围挡、警示标志、气体检测等安全措施缺失的，每项扣 2 分"},
+			},
+		}
+		if err := tx.Create(&scheme).Error; err != nil {
+			return err
+		}
+
 		logger.Info("演示数据初始化完成",
 			"segments", len(segments),
 			"tasks", len(tasks),
 			"records", len(records),
 			"acceptances", len(acceptances),
+			"scoreItems", len(scheme.Items),
 		)
 		return nil
 	})

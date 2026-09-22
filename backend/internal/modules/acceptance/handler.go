@@ -4,6 +4,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/drainage/desilting/internal/httpx"
+	"github.com/drainage/desilting/internal/shared/date"
 )
 
 // Handler 验收记录 HTTP 接口。
@@ -70,6 +71,45 @@ func (h *Handler) Rectify(c *fiber.Ctx) error {
 		return err
 	}
 	return httpx.Message(c, "整改完成已登记，可重新提交完工报验", record)
+}
+
+// ListSchemes 评分方案版本列表。
+func (h *Handler) ListSchemes(c *fiber.Ctx) error {
+	schemes, err := h.svc.ListSchemes(c.UserContext())
+	if err != nil {
+		return err
+	}
+	return httpx.OK(c, schemes)
+}
+
+// EffectiveScheme 查询指定日期生效的评分方案（默认今天），无生效方案时 data 为 null。
+func (h *Handler) EffectiveScheme(c *fiber.Ctx) error {
+	day := date.Today()
+	if raw := httpx.TrimmedQuery(c, "date"); raw != "" {
+		parsed, err := date.Parse(raw)
+		if err != nil {
+			return httpx.BadRequest("日期格式不正确，应为 YYYY-MM-DD")
+		}
+		day = parsed
+	}
+	scheme, err := h.svc.EffectiveScheme(c.UserContext(), day)
+	if err != nil {
+		return err
+	}
+	return httpx.OK(c, scheme)
+}
+
+// CreateScheme 调整评分项：新增方案版本，自生效日期起生效。
+func (h *Handler) CreateScheme(c *fiber.Ctx) error {
+	var req SaveSchemeRequest
+	if err := httpx.BindAndValidate(c, &req); err != nil {
+		return err
+	}
+	scheme, err := h.svc.CreateScheme(c.UserContext(), req)
+	if err != nil {
+		return err
+	}
+	return httpx.Created(c, scheme)
 }
 
 // Delete 删除验收记录。

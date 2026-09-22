@@ -967,6 +967,76 @@ h3 {
   color: var(--color-text-muted);
 }
 
+/* ---------- 验收评分 ---------- */
+.score-item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.score-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+}
+
+.score-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.score-item-name {
+  font-weight: 600;
+}
+
+.score-item-max {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.scheme-item-head,
+.scheme-item-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) 110px minmax(200px, 1.6fr) 64px;
+  gap: 8px;
+  align-items: center;
+}
+
+.scheme-item-head {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.scheme-item-row {
+  margin-bottom: 8px;
+}
+
+.scheme-item-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.scheme-total {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.scheme-total-ok {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
 /* ---------- 响应式 ---------- */
 @media (max-width: 1200px) {
   .stat-grid {
@@ -1015,5 +1085,15 @@ h3 {
   .info-span-2,
   .info-span-3 {
     grid-column: span 1;
+  }
+
+  .scheme-item-head {
+    display: none;
+  }
+
+  .scheme-item-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--color-border);
   }
 }
